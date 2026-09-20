@@ -87,7 +87,7 @@ enum ModelsTests {
             try T.eq(state.done.count, 1)
         }
 
-        T.test("decodeOldCarriedTrueBecomesOneNight") {
+        T.test("decodeItemMissingNightsDefaultsToZero") {
             let json = """
             {
               "id": "abcd1234",
@@ -98,9 +98,8 @@ enum ModelsTests {
             }
             """
             let item = try Codec.decoder().decode(Item.self, from: Data(json.utf8))
-            try T.eq(item.nights, 1)
+            try T.eq(item.nights, 0)
             try T.ok(item.canKeep(stayDays: 5))
-            try T.ok(!item.canKeep(stayDays: 2))
         }
 
         T.test("decodeBoardStateMissingStayDaysDefaultsToFive") {

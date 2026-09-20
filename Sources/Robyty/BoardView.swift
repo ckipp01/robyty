@@ -29,6 +29,7 @@ struct BoardView: View {
     @Bindable var store: Store
     @FocusState private var inputFocused: Bool
     @State private var hoveredID: String?
+    @State private var rootDraft: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -68,6 +69,17 @@ struct BoardView: View {
             if tab == .today || tab == .tomorrow { focusDraft() }
             else { inputFocused = false }
         }
+        .onChange(of: store.isSettings) { wasShowing, showing in
+            if showing {
+                rootDraft = store.rootPath
+            } else if wasShowing {
+                // The tab/back buttons are .focusable(false), so a click never
+                // blurs the field to commit it the normal way. Leaving
+                // settings by any route commits whatever is pending instead.
+                commitRootDraft()
+            }
+        }
+        .onAppear { rootDraft = store.rootPath }
         .preferredColorScheme(.dark)
     }
 
@@ -75,6 +87,11 @@ struct BoardView: View {
         guard store.tab != .overview, !store.isClosing, !store.isSettings, !store.escapeLocked else { return }
         inputFocused = false
         DispatchQueue.main.async { inputFocused = true }
+    }
+
+    private func commitRootDraft() {
+        store.changeRoot(to: rootDraft)
+        rootDraft = store.rootPath
     }
 
     private func lockEscape(_ locked: Bool) {
@@ -417,6 +434,39 @@ struct BoardView: View {
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .focusable(false)
+            }
+
+            Rectangle()
+                .fill(paper2)
+                .frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("board folder")
+                    .font(.system(size: 13))
+                    .foregroundStyle(ink)
+                Text("where state.json and archive/ live. press return, or just leave settings, to move it here.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextField("path", text: $rootDraft)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(ink)
+                    .padding(8)
+                    .background(paper2)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .onSubmit { commitRootDraft() }
+                if let error = store.rootChangeError {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundStyle(rust)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if store.rootChangeConfirmed {
+                    Text("moved. board now lives at \(store.rootPath).")
+                        .font(.system(size: 11))
+                        .foregroundStyle(moss)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.horizontal, 16)

@@ -10,6 +10,7 @@ enum RobytyTestRunner {
         StoreTests.run()
         CloseTests.run()
         SettingsTests.run()
+        ReloadTests.run()
         T.summaryAndExit()
     }
 
