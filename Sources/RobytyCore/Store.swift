@@ -22,6 +22,9 @@ public final class Store {
     public var isSettings = false
     public var overview = OverviewStats()
     public var onChange: (() -> Void)?
+    /// Fired when `setRoot` moves the board, so the app shell can re-point
+    /// its file watcher at the new folder.
+    public var onRootChange: (() -> Void)?
 
     public var openItems: [Item] { state.open }
     public var doneItems: [Item] { state.done }
@@ -156,15 +159,17 @@ public final class Store {
         relayout()
     }
 
-    private let liveURL: URL
-    private let archiveDir: URL
+    private var liveURL: URL
+    private var archiveDir: URL
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let now: () -> Date
+    private let defaults: UserDefaults
 
-    public init(root: URL? = nil, now: @escaping () -> Date = { Date() }) {
+    public init(root: URL? = nil, now: @escaping () -> Date = { Date() }, defaults: UserDefaults = .standard) {
         self.now = now
-        let resolved = root ?? Store.defaultRoot()
+        self.defaults = defaults
+        let resolved = root ?? Store.defaultRoot(defaults: defaults)
         liveURL = resolved.appendingPathComponent("state.json")
         archiveDir = resolved.appendingPathComponent("archive")
 
@@ -180,6 +185,10 @@ public final class Store {
         state = BoardState(date: BoardDate.boardStamp(now(), skipWeekends: false), skipWeekends: false)
         try? FileManager.default.createDirectory(at: archiveDir, withIntermediateDirectories: true)
         load()
+        applyLoadedState()
+    }
+
+    private func applyLoadedState() {
         markInheritedCarry()
         rolloverIfNeeded()
         refreshOverview()
@@ -475,6 +484,27 @@ public final class Store {
         }
     }
 
+    /// Picks up edits made to `state.json` by another process while Robyty is
+    /// running (e.g. an external tool with the board folder open). No-op if
+    /// the file is unreadable, unchanged, or a close is in progress — closing
+    /// keys `choices`/`dropNotes` by item id, and swapping `state` out from
+    /// under it could strand those choices against items that no longer
+    /// match.
+    public func reloadFromDiskIfChanged() {
+        guard !isClosing else { return }
+        guard FileManager.default.fileExists(atPath: liveURL.path) else { return }
+        guard let data = try? Data(contentsOf: liveURL) else { return }
+        guard let decoded = try? decoder.decode(BoardState.self, from: data) else {
+            Log.store.error("failed to parse externally-changed live state")
+            return
+        }
+        guard decoded != state else { return }
+        Log.store.notice("reloaded externally-changed live state")
+        state = decoded
+        applyLoadedState()
+        onChange?()
+    }
+
     private func markInheritedCarry() {
         let today = state.date
         var changed = false
@@ -641,12 +671,80 @@ public final class Store {
         UNUserNotificationCenter.current().add(req)
     }
 
-    public static func defaultRoot() -> URL {
+    static let rootOverrideKey = "RobytyRootOverride"
+
+    public static func defaultRoot(defaults: UserDefaults = .standard) -> URL {
         if let env = ProcessInfo.processInfo.environment["ROBYTY_ROOT"], !env.isEmpty {
             return URL(fileURLWithPath: env, isDirectory: true)
+        }
+        if let saved = defaults.string(forKey: rootOverrideKey), !saved.isEmpty {
+            return URL(fileURLWithPath: saved, isDirectory: true)
         }
         return FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Robyty", isDirectory: true)
+    }
+
+    /// The folder currently holding `state.json` and `archive/`.
+    public var rootPath: String { liveURL.deletingLastPathComponent().path }
+
+    /// Set by `changeRoot` when a move fails; cleared on the next attempt.
+    public var rootChangeError: String?
+
+    /// Set by `changeRoot` on success; cleared on the next attempt.
+    public var rootChangeConfirmed = false
+
+    /// Moves the live board and archive to `newRoot` and remembers the choice
+    /// for future launches. No-op if `newRoot` is already the current root.
+    public func setRoot(to newRoot: URL) throws {
+        let target = newRoot.standardizedFileURL
+        let current = liveURL.deletingLastPathComponent().standardizedFileURL
+        guard target != current else { return }
+
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+
+        let newLiveURL = target.appendingPathComponent("state.json")
+        let newArchiveDir = target.appendingPathComponent("archive")
+
+        if FileManager.default.fileExists(atPath: liveURL.path) {
+            if FileManager.default.fileExists(atPath: newLiveURL.path) {
+                try FileManager.default.removeItem(at: newLiveURL)
+            }
+            try FileManager.default.moveItem(at: liveURL, to: newLiveURL)
+        }
+
+        try FileManager.default.createDirectory(at: newArchiveDir, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: archiveDir.path) {
+            for entry in try FileManager.default.contentsOfDirectory(at: archiveDir, includingPropertiesForKeys: nil) {
+                let dest = newArchiveDir.appendingPathComponent(entry.lastPathComponent)
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.moveItem(at: entry, to: dest)
+            }
+            try? FileManager.default.removeItem(at: archiveDir)
+        }
+
+        liveURL = newLiveURL
+        archiveDir = newArchiveDir
+        defaults.set(target.path, forKey: Store.rootOverrideKey)
+        onRootChange?()
+    }
+
+    /// UI entry point: takes a raw path from a text field, expands `~`, and
+    /// reports the outcome via `rootChangeError` / `rootChangeConfirmed`
+    /// instead of throwing.
+    public func changeRoot(to path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        do {
+            try setRoot(to: URL(fileURLWithPath: expanded, isDirectory: true))
+            rootChangeError = nil
+            rootChangeConfirmed = true
+        } catch {
+            rootChangeConfirmed = false
+            rootChangeError = error.localizedDescription
+        }
     }
 }

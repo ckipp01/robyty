@@ -44,11 +44,21 @@ pulling code changes.
 | :-- | :-- | :-- |
 | Stay length | 5 days | Range 1–10. How long a leftover survives before it drops. |
 | Skip weekends | off | Off: every day, including Saturday/Sunday, is a board day. On: weekends aren't board days — a Friday leftover carries to Monday instead of Saturday. |
+| Board folder | `~/Library/Application Support/Robyty` | Where `state.json` and `archive/` live. Enter a path and Robyty moves the live board and archive there, and remembers the choice for future launches. |
 
 ## Data
 
-Lives under `~/Library/Application Support/Robyty/` by default (override with
-`ROBYTY_ROOT`).
+Lives under `~/Library/Application Support/Robyty/` by default. The Settings
+board-folder field is the normal way to change this (it moves the existing
+data for you); `ROBYTY_ROOT` is an env-var override for scripts and tests, and
+takes precedence over the Settings value when set.
+
+Robyty watches the board folder while running and reloads `state.json` if
+something else changes it on disk (e.g. an external tool editing the live
+board directly) — useful once you've pointed the board folder somewhere an
+external tool can reach. It also re-reads on wake and whenever the panel is
+shown, as a fallback. Reload is skipped mid-close (`close day` in progress),
+since that flow tracks in-flight choices by item id.
 
 | Path | Role |
 | :-- | :-- |
@@ -92,7 +102,9 @@ Live schema:
 
 - `open_count` is derived. Treat `done_at == null` as still open.
 - `nights` is how many extra days an item has already used; last day when
-  `nights >= stay_days - 1`. `carried: true` is that last-day flag for readers.
+  `nights >= stay_days - 1`. `carried: true` is that last-day flag for readers,
+  written for convenience but never read back — `nights` is the only source
+  of truth on load.
 - `dismissed` is mid-day drops; they join archive `dropped` at close or midnight.
 - `note` is an optional why, on done items and on dismissed/dropped items.
 - `context` is an optional living subtitle on an item. Never overwrite a

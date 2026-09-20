@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var hosting: NSHostingController<BoardView>!
     private var reclaimKeyFromStatus = false
     private var showGeneration = 0
+    private var rootWatcher: DispatchSourceFileSystemObject?
+    private var rootWatchFD: Int32 = -1
+    private var reloadWorkItem: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -34,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self?.focusWhyField()
             }
         }
+        store.onRootChange = { [weak self] in self?.startWatchingRoot() }
+        startWatchingRoot()
 
         let rootView = BoardView(store: store)
         hosting = NSHostingController(rootView: rootView)
@@ -174,8 +179,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func didWake() {
         store.rolloverIfNeeded()
+        store.reloadFromDiskIfChanged()
         refreshIcon()
         scheduleMidnight()
+    }
+
+    /// Watches the board folder for changes made by another process (e.g. an
+    /// external tool editing `state.json` directly) and reloads Robyty's live
+    /// state to match. Re-armed via `store.onRootChange` whenever the folder
+    /// moves.
+    private func startWatchingRoot() {
+        stopWatchingRoot()
+        let path = store.rootPath
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else {
+            Log.app.error("failed to watch root: \(path, privacy: .public)")
+            return
+        }
+        rootWatchFD = fd
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename, .delete],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            self?.debounceReload()
+        }
+        source.setCancelHandler { [weak self] in
+            guard let fd = self?.rootWatchFD, fd >= 0 else { return }
+            close(fd)
+        }
+        source.resume()
+        rootWatcher = source
+    }
+
+    private func stopWatchingRoot() {
+        rootWatcher?.cancel()
+        rootWatcher = nil
+        rootWatchFD = -1
+    }
+
+    private func debounceReload() {
+        reloadWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.store.reloadFromDiskIfChanged()
+        }
+        reloadWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     @objc private func statusClicked() {
@@ -213,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showPanel(fromStatusItem: Bool = false) {
         Log.app.info("show panel")
         store.rolloverIfNeeded()
+        store.reloadFromDiskIfChanged()
         refreshIcon()
         resizePanel()
         placePanelTopRight()

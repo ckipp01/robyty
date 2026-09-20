@@ -107,6 +107,70 @@ enum SettingsTests {
             try T.eq(store.state.pending[0].nights, 2)
         }
 
+        T.test("changeRootMovesLiveStateAndArchive") {
+            let clock = TestClock(Fixtures.noon(Fixtures.monday))
+            let (store, oldRoot) = try Harness.fresh(clock: clock)
+            Harness.add(store, "moving item")
+            try Harness.writeArchive(
+                DayArchive(date: Fixtures.friday, closedAt: Fixtures.noon(Fixtures.friday), closeKind: "manual"),
+                root: oldRoot
+            )
+
+            let newRoot = try Harness.makeRoot().appendingPathComponent("nested", isDirectory: true)
+            store.changeRoot(to: newRoot.path)
+
+            try T.ok(store.rootChangeError == nil)
+            try T.eq(store.rootPath, newRoot.standardizedFileURL.path)
+            try T.ok(!FileManager.default.fileExists(atPath: oldRoot.appendingPathComponent("state.json").path))
+
+            let moved = try Harness.readLive(root: newRoot)
+            try T.eq(moved.items.map(\.text), ["moving item"])
+            let movedArchive = try Harness.readArchive(root: newRoot, date: Fixtures.friday)
+            try T.eq(movedArchive.date, Fixtures.friday)
+
+            let reopened = Harness.open(root: newRoot, clock: clock)
+            try T.eq(reopened.state.items.map(\.text), ["moving item"])
+        }
+
+        T.test("changeRootPersistsForFutureDefaultRootLookups") {
+            let clock = TestClock(Fixtures.noon(Fixtures.monday))
+            let suiteName = "robyty-test-\(UUID().uuidString)"
+            let testDefaults = UserDefaults(suiteName: suiteName)!
+            defer { testDefaults.removePersistentDomain(forName: suiteName) }
+
+            let root = try Harness.makeRoot()
+            let store = Store(root: root, now: { clock.date }, defaults: testDefaults)
+            let newRoot = try Harness.makeRoot()
+
+            store.changeRoot(to: newRoot.path)
+            try T.ok(store.rootChangeError == nil)
+            try T.eq(Store.defaultRoot(defaults: testDefaults), newRoot.standardizedFileURL)
+        }
+
+        T.test("changeRootToSameLocationIsNoop") {
+            let clock = TestClock(Fixtures.noon(Fixtures.monday))
+            let (store, root) = try Harness.fresh(clock: clock)
+            Harness.add(store, "stays put")
+            store.changeRoot(to: root.path)
+            try T.ok(store.rootChangeError == nil)
+            try T.eq(store.state.items.map(\.text), ["stays put"])
+        }
+
+        T.test("changeRootToBlockedPathReportsErrorAndKeepsOldState") {
+            let clock = TestClock(Fixtures.noon(Fixtures.monday))
+            let (store, oldRoot) = try Harness.fresh(clock: clock)
+            Harness.add(store, "stuck here")
+
+            let blocker = try Harness.makeRoot().appendingPathComponent("blocker")
+            try Data().write(to: blocker)
+
+            store.changeRoot(to: blocker.path)
+            try T.ok(store.rootChangeError != nil)
+            try T.eq(store.rootPath, oldRoot.standardizedFileURL.path)
+            let stillThere = try Harness.readLive(root: oldRoot)
+            try T.eq(stillThere.items.map(\.text), ["stuck here"])
+        }
+
         T.test("encodedCarriedIsLastDayUnderCurrentStay") {
             var item = Item.make("open", now: Fixtures.noon(Fixtures.friday))
             item.nights = 1

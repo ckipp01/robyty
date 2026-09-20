@@ -62,13 +62,7 @@ public struct Item: Codable, Identifiable, Equatable, Hashable, Sendable {
         text = try c.decode(String.self, forKey: .text)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         doneAt = try c.decodeIfPresent(Date.self, forKey: .doneAt)
-        let decodedNights = try c.decodeIfPresent(Int.self, forKey: .nights)
-        let oldCarried = try c.decodeIfPresent(Bool.self, forKey: .carried) ?? false
-        if let decodedNights {
-            nights = max(decodedNights, 0)
-        } else {
-            nights = oldCarried ? 1 : 0
-        }
+        nights = max(try c.decodeIfPresent(Int.self, forKey: .nights) ?? 0, 0)
         let rawNote = try c.decodeIfPresent(String.self, forKey: .note)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         note = (rawNote?.isEmpty == false) ? rawNote : nil

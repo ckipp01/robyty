@@ -71,7 +71,9 @@ board day — pass `skipWeekends: false` to `Harness.fresh` to test that mode.
 - `BoardDate`: weekend vs weekday, board stamp, next weekday (Fri → Mon), labels;
   `skipWeekends: false` variants keep Saturday/Sunday as ordinary board days
 - Item / `BoardState` JSON: missing `note` / `context` / `dismissed` / `skip_weekends`,
-  blank strings become nil, encode omits empty optionals, derived `open_count`
+  blank strings become nil, encode omits empty optionals, derived `open_count`;
+  missing `nights` defaults to 0 — `carried` is write-only (derived from
+  `nights` + `stay_days` for readers) and never read back, no legacy migration
 - Add, complete (optional note), reopen (clears note), dismiss, rename, context
 - Tomorrow tab writes `pending`; Friday tomorrow header is Monday (skip weekends on)
 - Skip-close Friday leftover survives Sat/Sun, auto-carries Monday (`nights` +1)
@@ -80,6 +82,13 @@ board day — pass `skipWeekends: false` to `Harness.fresh` to test that mode.
 - Stay length setting (default 5 days, clamp 1 to 10); raising it lets an old last-day be kept
 - `skip_weekends` setting (default off, i.e. every day counts); toggling persists
   and re-runs rollover immediately
+- Board folder setting: moves `state.json` and `archive/` to a new root, persists
+  the choice for future `defaultRoot()` lookups, no-ops on the same path, and
+  reports an error (leaving the old location untouched) when the target can't
+  be created
+- Reload from disk: picks up an externally-written done mark/note by id,
+  no-ops when the file is unchanged, skips while a close is in progress, and
+  ignores an unparsable external write instead of clearing live state
 - Thursday → Friday is one night
 - Weekend live `date` snaps to Friday (skip weekends on)
 - Close keep parks in `pending`; close drop writes `note`
